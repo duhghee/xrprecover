@@ -1,8 +1,17 @@
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+
 .venv/
 venv/
 env/
-*.txt
+
+# Sensitive/output artifacts
+new_seed.txt
+position_matches.txt
+pattern_matches.txt
+missing_words.txt
+descrambled.txt
+tokenlist_matches.txt
+tokenlist.txt
