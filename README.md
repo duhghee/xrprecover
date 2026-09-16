@@ -146,3 +146,8 @@ Only marked positions should be replaced in modes configured for missing-word re
 Token-list mode uses candidate groups assigned to seed positions. Unanchored positions should exchange candidates only with other unanchored positions.
 
 Do not publish a token list containing a genuine or partially reconstructed seed phrase.
+
+***  Inspired by https://github.com/d31337m3/seedy/  ***
+
+
+
