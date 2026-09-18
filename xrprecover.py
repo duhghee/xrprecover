@@ -261,12 +261,12 @@ def _batched(iterable, size):
 
 
 def _scan_batch_worker(task):
-    template_words, combos, target_address = task
-    positions = [index + 1 for index, word in enumerate(template_words)
-                 if word == "?"]
+    template_words, placeholder_positions, combos, target_address, checksum_prevalidated = task
+    completed_words = list(template_words)
     for combo in combos:
-        completed_words = _fill_placeholders(template_words, combo)
-        if not _is_valid_12_word_checksum(completed_words):
+        for offset, position in enumerate(placeholder_positions):
+            completed_words[position] = combo[offset]
+        if not checksum_prevalidated and not _is_valid_12_word_checksum(completed_words):
             continue
         phrase = " ".join(completed_words)
         try:
@@ -276,11 +276,78 @@ def _scan_batch_worker(task):
         if address == target_address:
             return len(combos), {
                 'match_type': 'placeholders',
-                'replacements': list(zip(positions, combo)),
+                'replacements': [(position + 1, combo[offset]) for offset, position in enumerate(placeholder_positions)],
                 'phrase': phrase,
                 'address': address
             }
     return len(combos), None
+
+
+def _mode1_candidate_plan(template_words, placeholder_positions, wordlist):
+    """
+    Build Mode 1 candidate iterator and checksum strategy.
+    When the final word is a placeholder, only generate candidates that can
+    satisfy the 12-word BIP-39 checksum.
+    """
+    placeholder_count = len(placeholder_positions)
+    naive_total = len(wordlist) ** placeholder_count
+    if 11 not in placeholder_positions:
+        return itertools.product(wordlist, repeat=placeholder_count), False, naive_total
+
+    mnemo = Mnemonic("english")
+    word_to_index = {word: index for index, word in enumerate(mnemo.wordlist)}
+    valid_words = tuple(word for word in wordlist if word in word_to_index)
+    if not valid_words:
+        return iter(()), True, 0
+
+    first_eleven = template_words[:11]
+    for word in first_eleven:
+        if word != "?" and word not in word_to_index:
+            return iter(()), True, 0
+
+    non_last_positions = tuple(position for position in placeholder_positions
+                               if position != 11)
+    valid_last_indexes = {word_to_index[word] for word in valid_words}
+    full_bip39_wordlist = (
+        len(valid_words) == len(mnemo.wordlist)
+        and set(valid_words) == set(mnemo.wordlist)
+    )
+
+    def _combos():
+        prefix_words = list(first_eleven)
+        for non_last_combo in itertools.product(valid_words, repeat=len(non_last_positions)):
+            for offset, position in enumerate(non_last_positions):
+                if position < 11:
+                    prefix_words[position] = non_last_combo[offset]
+            try:
+                packed = 0
+                for word in prefix_words:
+                    packed = (packed << 11) | word_to_index[word]
+            except KeyError:
+                continue
+
+            for entropy_suffix in range(128):
+                entropy = ((packed << 7) | entropy_suffix).to_bytes(16, "big")
+                checksum = hashlib.sha256(entropy).digest()[0] >> 4
+                last_index = (entropy_suffix << 4) | checksum
+                if last_index not in valid_last_indexes:
+                    continue
+                last_word = mnemo.wordlist[last_index]
+                non_last_offset = 0
+                combo = []
+                for position in placeholder_positions:
+                    if position == 11:
+                        combo.append(last_word)
+                    else:
+                        combo.append(non_last_combo[non_last_offset])
+                        non_last_offset += 1
+                yield tuple(combo)
+
+    if full_bip39_wordlist:
+        optimized_total = (len(valid_words) ** len(non_last_positions)) * 128
+    else:
+        optimized_total = naive_total
+    return _combos(), True, optimized_total
 
 
 def _pattern_batch_worker(task):
@@ -369,7 +436,12 @@ def scan_positions_for_address(seed_words, target_address, wordlist, processes=1
     if not 1 <= placeholder_count <= 5:
         print("\n✗ Module 1 requires between 1 and 5 ? placeholders")
         return []
-    total = len(wordlist) ** placeholder_count
+    template_words = tuple(seed_words)
+    placeholder_positions = tuple(index for index, word in enumerate(template_words)
+                                  if word == "?")
+    combos, checksum_prevalidated, total = _mode1_candidate_plan(
+        template_words, placeholder_positions, wordlist
+    )
     tracker = ProgressTracker("Position Scanner", total)
     matches = []
     
@@ -382,8 +454,8 @@ def scan_positions_for_address(seed_words, target_address, wordlist, processes=1
         print("⚠️ This search space is extremely large and may be impractical.")
     
     try:
-        combos = itertools.product(wordlist, repeat=placeholder_count)
-        tasks = ((tuple(seed_words), batch, target_address)
+        tasks = ((template_words, placeholder_positions, batch,
+                  target_address, checksum_prevalidated)
                  for batch in _batched(combos, batch_size))
         for tested, match in _pool_results(_scan_batch_worker, tasks, processes):
             tracker.update(tested)
