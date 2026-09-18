@@ -261,7 +261,7 @@ def _batched(iterable, size):
 
 
 def _scan_batch_worker(task):
-    template_words, combos, target_address = task
+    template_words, combos, target_account_id, target_address = task
     positions = [index + 1 for index, word in enumerate(template_words)
                  if word == "?"]
     for combo in combos:
@@ -270,15 +270,15 @@ def _scan_batch_worker(task):
             continue
         phrase = " ".join(completed_words)
         try:
-            address = derive_xrp_address(phrase)
-        except Exception:
+            account_id = _mode8_account_id(phrase)
+        except (ValueError, OverflowError):
             continue
-        if address == target_address:
+        if account_id == target_account_id:
             return len(combos), {
                 'match_type': 'placeholders',
                 'replacements': list(zip(positions, combo)),
                 'phrase': phrase,
-                'address': address
+                'address': target_address
             }
     return len(combos), None
 
@@ -369,6 +369,13 @@ def scan_positions_for_address(seed_words, target_address, wordlist, processes=1
     if not 1 <= placeholder_count <= 5:
         print("\n✗ Module 1 requires between 1 and 5 ? placeholders")
         return []
+
+    try:
+        target_account_id = _decode_xrp_account_id(target_address)
+    except ValueError as exc:
+        print(f"\n✗ Invalid XRP classic address: {exc}")
+        return []
+
     total = len(wordlist) ** placeholder_count
     tracker = ProgressTracker("Position Scanner", total)
     matches = []
@@ -383,7 +390,7 @@ def scan_positions_for_address(seed_words, target_address, wordlist, processes=1
     
     try:
         combos = itertools.product(wordlist, repeat=placeholder_count)
-        tasks = ((tuple(seed_words), batch, target_address)
+        tasks = ((tuple(seed_words), batch, target_account_id, target_address)
                  for batch in _batched(combos, batch_size))
         for tested, match in _pool_results(_scan_batch_worker, tasks, processes):
             tracker.update(tested)
