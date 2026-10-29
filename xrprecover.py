@@ -7,7 +7,7 @@ Derivation: BIP-39 (empty passphrase) -> BIP-32 secp256k1 -> XRP classic address
 at m/44'/144'/0'/0/0. Only *classic* r-addresses are accepted; X-addresses are
 rejected up front.
 
-Modes 1-15 extend the original menu; see --help / the interactive menu.
+Modes 1-16 extend the original menu; see --help / the interactive menu.
 """
 
 import argparse
@@ -293,7 +293,7 @@ def process_batch(batch):
             valid.append((phrase, dict(position=position + 1,
                 original=config["words"][position], replacement=words[position],
                 phrase=phrase)))
-        elif mode in (14, 15):
+        elif mode in (14, 15, 16):
             indices = candidate
             if not checksum_valid(pack_indices(indices)):
                 continue
@@ -373,7 +373,7 @@ def process_batch(batch):
     results = []
     for (phrase, metadata), seed in zip(valid, seeds):
         address = _derive_xrp_from_seed(seed, phrase)
-        if mode in (1, 8, 9, 10, 11, 13, 14, 15):
+        if mode in (1, 8, 9, 10, 11, 13, 14, 15, 16):
             if address == config["target"]:
                 results.append(metadata)
         elif address.endswith(config["pattern"]):
@@ -401,7 +401,7 @@ def run_search(name, total, candidates, config, processes=None,
         raise ValueError("Processes and batch size must be positive")
 
     config = dict(config)
-    needs_native = config["mode"] in (1, 2, 8, 9, 10, 11, 13, 14, 15)
+    needs_native = config["mode"] in (1, 2, 8, 9, 10, 11, 13, 14, 15, 16)
     config["native"] = needs_native and optional_native_engine() is not None
     if needs_native:
         print("PBKDF2 backend: "
@@ -715,6 +715,63 @@ def recover_missing_positions(seed_words, target_address, wordlist,
                       config, processes, batch_size, stop_on_first=True)
 
 
+def recover_permuted_missing_positions(seed_words, target_address, wordlist,
+                                       processes=None, batch_size=DEFAULT_BATCH_SIZE):
+    """Mode 16: fill 1-4 missing words and permute every resulting position."""
+    if len(seed_words) != 12 or not 1 <= seed_words.count("?") <= 4:
+        print("\nEnter exactly 12 positions with 1-4 '?' placeholders.")
+        return []
+    if not is_classic_xrp_address(target_address):
+        print("\nInvalid XRP classic address.")
+        return []
+    known = prepare_words([w for w in seed_words if w != "?"])
+    pool = prepare_words(tuple(dict.fromkeys(wordlist)))
+    if known is None or pool is None or not pool:
+        return []
+    missing = seed_words.count("?")
+    # Enumerate each distinct completed multiset once, even with repeated words.
+    known_counts = Counter(known)
+    def selections(start, remaining, chosen):
+        if not remaining:
+            yield tuple(chosen)
+            return
+        for i in range(start, len(pool)):
+            chosen.append(pool[i])
+            yield from selections(i, remaining - 1, chosen)
+            chosen.pop()
+    def permutation_count(values):
+        count = math.factorial(12)
+        for freq in Counter(values).values():
+            count //= math.factorial(freq)
+        return count
+    # Compute exact progress total without materializing permutations.
+    total = sum(permutation_count(known + addition)
+                for addition in selections(0, missing, []))
+    def candidates():
+        for addition in selections(0, missing, []):
+            yield from unique_permutations(known + addition)
+    print(f"\nMode 16: {total:,} candidates; all 12 positions permuted.")
+    if total > 100_000_000:
+        print("WARNING: Exhaustive search may be computationally infeasible.")
+    return run_search("Permuted Missing Positions Address Scan", total,
+                      candidates(), dict(mode=16, target=target_address),
+                      processes, batch_size, stop_on_first=True)
+
+
+def handle_mode_16(mnemonic, address, wordlist, processes, batch_size):
+    words = parse_mnemonic_input(mnemonic)
+    matches = recover_permuted_missing_positions(words, address, wordlist,
+                                                 processes, batch_size)
+    if matches:
+        with open("mode16_matches.txt", "w", encoding="utf-8") as output:
+            for match in matches:
+                output.write(f"XRP address: {match['address']}\n"
+                             f"Seed phrase: {match['phrase']}\n")
+        print("\nMatch saved to mode16_matches.txt")
+    else:
+        print("\nNo match found (or search interrupted).")
+
+
 def load_tokenlist(path):
     """Read tokenlist.py syntax: '^N^word' pins a row; bare rows permute."""
     path = Path(path).expanduser()
@@ -1011,6 +1068,7 @@ def print_menu():
     [13] 🎯 Match Address From Missing Trailing Words...(positions fixed)
     [14] 🔀 Unscramble Positions With One Wrong Word....(all pos permute)
     [15] 🔀 Unscramble Positions With Two Wrong Words...(all pos permute)
+    [16] 🧩 Recover 1-4 Missing With Permutations......(all pos permute)
     """)
 
 
@@ -1338,7 +1396,7 @@ def build_parser():
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
                         help="Candidates per worker task (default: 1024)")
     parser.add_argument("--pbkdf2-backend", choices=("auto", "reference"), default="auto")
-    parser.add_argument("--mode", type=int, choices=range(1, 16), metavar="1-15")
+    parser.add_argument("--mode", type=int, choices=range(1, 17), metavar="1-16")
     parser.add_argument("--address", help="Target classic XRP address (r...)")
     parser.add_argument("--pattern", help="Address suffix for mode 2")
     parser.add_argument("--mnemonic", help="Space-separated words; '?' for missing")
@@ -1378,6 +1436,8 @@ def dispatch(mode, args, wordlist):
         handle_mode_10(args.mnemonic, args.address, wordlist, p, b)
     elif mode == "14":
         handle_mode_14(args.mnemonic, args.address, wordlist, p, b)
+    elif mode == "16":
+        handle_mode_16(args.mnemonic, args.address, wordlist, p, b)
     elif mode == "15":
         handle_mode_15(args.mnemonic, args.address, wordlist, p, b)
     elif mode == "11":
@@ -1397,7 +1457,7 @@ def interactive(args):
     clear_screen()
     print_banner()
     print_menu()
-    mode = input("\n📎 Enter mode number (1-15): ").strip()
+    mode = input("\n📎 Enter mode number (1-16): ").strip()
     args.mode = int(mode) if mode.isdigit() else 0
     if mode == "1":
         args.mnemonic = input("\n🔤 Enter your 12-word seed phrase:\n").strip()
@@ -1430,6 +1490,10 @@ def interactive(args):
     elif mode == "14":
         args.mnemonic = input("\nEnter 12 scrambled words (1 wrong):\n").strip()
         args.address = input("Enter target XRP classic address:\n").strip()
+    elif mode == "16":
+        print("\nEnter 12 words with 1-4 ? placeholders; all positions will permute.")
+        args.mnemonic = input().strip()
+        args.address = input("Enter target classic XRP address:\n").strip()
     elif mode == "15":
         args.mnemonic = input("\nEnter 12 scrambled words (2 wrong):\n").strip()
         args.address = input("Enter target XRP classic address:\n").strip()
@@ -1462,8 +1526,8 @@ def main(argv=None):
 
     # Validate CLI-only combinations early.
     if args.mode is not None:
-        needs_mnemonic = args.mode in (1, 2, 3, 4, 5, 6, 8, 10, 11, 13, 14, 15)
-        needs_address = args.mode in (1, 2, 8, 9, 10, 11, 13, 14, 15)
+        needs_mnemonic = args.mode in (1, 2, 3, 4, 5, 6, 8, 10, 11, 13, 14, 15, 16)
+        needs_address = args.mode in (1, 2, 8, 9, 10, 11, 13, 14, 15, 16)
         if needs_mnemonic and not args.mnemonic:
             parser.error(f"--mode {args.mode} requires --mnemonic")
         if needs_address and not (args.address or args.pattern):
