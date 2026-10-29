@@ -1,0 +1,61 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Runtime output (may contain PRIVATE mnemonic phrases)
+new_seed.txt
+position_matches.txt
+pattern_matches.txt
+descrambled.txt
+missing_positions_matches.txt
+tokenlist_matches.txt
+two_wrong_word_matches.txt
+three_wrong_word_matches.txt
+mode3_results/
+missing_words_*.txt
+
+# Local tokenlists may contain sensitive mnemonic candidates
+tokenlist.txt
+tokenlist_*.txt
+
+# Optional generated local benchmark/native backend files
+pbkdf2_backend.json
+libpbkdf2_avx2.so
+
+# Logs
+*.log
+
+# Additional sensitive results from Modes 12-15
+mode12_results/
+mode13_results/
+mode14_matches.txt
+mode15_matches.txt
+
+# Editor scratch and local extras
+*.bak

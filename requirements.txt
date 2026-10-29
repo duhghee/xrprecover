@@ -1,0 +1,4 @@
+# XRPRecover Python dependencies (Ubuntu 24.04 / Python 3)
+mnemonic
+bip-utils
+coincurve
